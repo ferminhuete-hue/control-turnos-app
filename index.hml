@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Turnos</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #2c3e50; }
+        .form-group { display: flex; flex-direction: column; margin-bottom: 15px; }
+        label { margin-bottom: 5px; font-weight: bold; font-size: 14px; }
+        input, select, button { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
+        button { background-color: #27ae60; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 10px; transition: 0.3s; }
+        button:hover { background-color: #219150; }
+        .btn-danger { background-color: #e74c3c; margin-top: 20px; }
+        .btn-danger:hover { background-color: #c0392b; }
+        table { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background-color: #f8f9fa; }
+        .total-box { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 8px; text-align: center; font-size: 18px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>⏱️ Fichar Turnos</h2>
+    
+    <div class="form-group">
+        <label>Fecha</label>
+        <input type="date" id="fecha">
+    </div>
+    <div class="form-group">
+        <label>Día de la semana</label>
+        <select id="dia">
+            <option value="Jueves">Jueves</option>
+            <option value="Viernes">Viernes</option>
+            <option value="Sábado">Sábado</option>
+            <!-- Puedes añadir más días aquí -->
+        </select>
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <div class="form-group" style="flex: 1;">
+            <label>Entrada</label>
+            <input type="time" id="entrada" value="19:00">
+        </div>
+        <div class="form-group" style="flex: 1;">
+            <label>Salida</label>
+            <input type="time" id="salida" value="00:00">
+        </div>
+    </div>
+    <button onclick="agregarTurno()">Añadir Turno</button>
+
+    <div class="total-box">Total acumulado: <span id="totalHoras">0h 0m</span></div>
+
+    <table id="tablaTurnos">
+        <thead>
+            <tr>
+                <th>Día</th>
+                <th>Horario</th>
+                <th>Total</th>
+                <th>Acción</th> <!-- Añadimos columna para el botón de borrar -->
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Los turnos aparecerán aquí -->
+        </tbody>
+    </table>
+
+    <button class="btn-danger" onclick="borrarTodosLosDatos()">Borrar Todo el Historial</button>
+</div>
+
+<!-- FIREBASE SDK y LÓGICA DE LA APLICACIÓN -->
+<script type="module">
+  // Importa las funciones necesarias de los SDK de Firebase
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"; // Versión actualizada
+  import { getDatabase, ref, push, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js"; // Versión actualizada y módulos de Realtime Database
+  // Si quieres usar Analytics, añade también:
+  // import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics.js";
+
+
+  // Tu configuración de Firebase
+  const firebaseConfig = {
+    apiKey: "AIzaSyACwgWujQeeplJEL8ksxrHCuiwNGSwO5_Q",
+    authDomain: "caradura-turnos.firebaseapp.com",
+    databaseURL: "https://caradura-turnos-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "caradura-turnos",
+    storageBucket: "caradura-turnos.firebasestorage.app",
+    messagingSenderId: "383794485127",
+    appId: "1:383794485127:web:b1f0cad0294d3c7b37e522",
+    measurementId: "G-TC3LTTKRZ3"
+  };
+
+  // PIN de acceso jefe (el que quieras)
+  const PIN_JEFE = "EmilioArrieta"; 
+
+  // Inicializa Firebase
+  const app = initializeApp(firebaseConfig);
+  const database = getDatabase(app); // Obtiene una referencia a la Realtime Database
+  const turnosRef = ref(database, 'turnos'); // Referencia a la colección 'turnos' en tu DB
+
+  let turnos = {}; // Ahora 'turnos' será un objeto para facilitar la eliminación por ID
+
+  function calcularDiferencia(entrada, salida) {
+      let inicio = new Date(`1970-01-01T${entrada}:00`);
+      let fin = new Date(`1970-01-01T${salida}:00`);
+      
+      // Magia para los turnos que pasan de medianoche
+      if (fin < inicio) {
+          fin.setDate(fin.getDate() + 1);
+      }
+      return (fin - inicio) / (1000 * 60); // devuelve minutos
+  }
+
+  async function agregarTurno() {
+      const fechaInput = document.getElementById('fecha').value;
+      const dia = document.getElementById('dia').value;
+      const entrada = document.getElementById('entrada').value;
+      const salida = document.getElementById('salida').value;
+
+      if (!fechaInput || !entrada || !salida) {
+          alert("Por favor, rellena la fecha, hora de entrada y hora de salida.");
+          return;
+      }
+
+      const minutos = calcularDiferencia(entrada, salida);
+      
+      const nuevoTurno = { fecha: fechaInput, dia, entrada, salida, minutos, timestamp: Date.now() };
+      
+      // Guarda el nuevo turno en Firebase
+      await push(turnosRef, nuevoTurno);
+      
+      // La UI se actualizará automáticamente gracias al listener de onValue
+      alert('Turno añadido con éxito!');
+  }
+
+  function actualizarUI() {
+      const tbody = document.querySelector('#tablaTurnos tbody');
+      tbody.innerHTML = '';
+      let totalMinutos = 0;
+
+      // Convertimos el objeto de turnos a un array para ordenarlos si es necesario
+      const turnosArray = Object.keys(turnos).map(key => ({ id: key, ...turnos[key] }));
+      turnosArray.sort((a, b) => a.timestamp - b.timestamp); // Ordenar por fecha o timestamp
+
+      if (turnosArray.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="4" style="text-align: center;">No hay turnos registrados.</td></tr>`;
+      } else {
+        turnosArray.forEach(turno => {
+            totalMinutos += turno.minutos;
+            let h = Math.floor(turno.minutos / 60);
+            let m = turno.minutos % 60;
+            
+            tbody.innerHTML += `
+                <tr>
+                    <td>${turno.fecha} (${turno.dia})</td>
+                    <td>${turno.entrada} - ${turno.salida}</td>
+                    <td>${h}h ${m}m</td>
+                    <td><button onclick="borrarTurno('${turno.id}')" style="background-color: #e74c3c; color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer;">Borrar</button></td>
+                </tr>
+            `;
+        });
+      }
+
+      let totalH = Math.floor(totalMinutos / 60);
+      let totalM = totalMinutos % 60;
+      document.getElementById('totalHoras').innerText = `${totalH}h ${totalM}m`;
+  }
+
+  // Borrar un turno individual
+  window.borrarTurno = async function(id) {
+    if (confirm("¿Seguro que quieres borrar este turno?")) {
+        const itemRef = ref(database, `turnos/${id}`);
+        await remove(itemRef);
+        // La UI se actualizará automáticamente gracias al listener de onValue
+    }
+  }
+
+  // Borrar todos los datos de Realtime Database
+  window.borrarTodosLosDatos = async function() {
+      if(confirm("¿Seguro que quieres borrar TODOS los turnos? Esta acción es irreversible.")) {
+          await remove(turnosRef);
+          // La UI se actualizará automáticamente gracias al listener de onValue
+      }
+  }
+
+  // Escuchar cambios en la base de datos en tiempo real
+  onValue(turnosRef, (snapshot) => {
+      turnos = snapshot.val() || {}; // Cuando hay cambios, actualiza nuestro objeto local 'turnos'
+      actualizarUI(); // y luego actualiza la interfaz de usuario
+  });
+
+  // Cargar la fecha actual al iniciar
+  document.getElementById('fecha').valueAsDate = new Date();
+</script>
+
+</body>
+</html>
